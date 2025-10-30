@@ -1,12 +1,10 @@
-#!/usr/bin/env python3
-# scrapper-fiis.py
 import os
 import re
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
-# carregar .env
+# === Configuração ===
 load_dotenv()
 INVESTIDOR10_COOKIE = os.getenv("INVESTIDOR10_COOKIE")
 CARTEIRA_ID = os.getenv("CARTEIRA_ID")
@@ -18,11 +16,11 @@ HEADERS = {
 if INVESTIDOR10_COOKIE:
     HEADERS["Cookie"] = INVESTIDOR10_COOKIE
 
-# cores
 COLORS = {"barato": "\033[32m", "caro": "\033[31m", "justo": "\033[33m", "-": "\033[0m"}
 RESET = "\033[0m"
 
-# ---------- utilitários ----------
+
+# === Funções auxiliares ===
 def parse_brazilian_number(s):
     if s is None:
         return None
@@ -39,13 +37,15 @@ def parse_brazilian_number(s):
     except:
         return None
 
+
 def safe_float(v):
     try:
         return float(v)
     except (TypeError, ValueError):
         return None
 
-# ---------- extração ----------
+
+# === Extração de informações da página ===
 def extract_pvp_from_soup(soup):
     el = soup.find(string=re.compile(r'P\/?VP', re.I))
     if el:
@@ -64,6 +64,7 @@ def extract_pvp_from_soup(soup):
     if m:
         return parse_brazilian_number(m.group(1))
     return None
+
 
 def extract_price_by_sentence(soup, ticker):
     full = soup.get_text(" ", strip=True)
@@ -89,6 +90,7 @@ def extract_price_by_sentence(soup, ticker):
         return parse_brazilian_number(m.group(1))
     return None
 
+
 def extract_tipo_from_articlebody(soup):
     meta = soup.find("meta", attrs={"name": "articleBody"})
     if meta and meta.get("content"):
@@ -108,6 +110,7 @@ def extract_tipo_from_articlebody(soup):
     full = soup.get_text(" ", strip=True)
     return find_tipo_in_text(full) or "-"
 
+
 def find_tipo_in_text(text):
     if not text:
         return None
@@ -116,6 +119,7 @@ def find_tipo_in_text(text):
         if kw in t:
             return kw
     return None
+
 
 def get_fii_from_page(ticker):
     url = f"https://investidor10.com.br/fiis/{ticker.lower()}"
@@ -133,6 +137,7 @@ def get_fii_from_page(ticker):
         print(f"[debug] {ticker}: price={price}, pvp={pvp}, tipo={tipo}")
     return {"current_price": price, "p_vp": pvp, "fii_type": (tipo or "-")}
 
+
 def get_fiis_da_carteira():
     url = f"https://investidor10.com.br/wallet/api/proxy/wallet-app/summary/actives/{CARTEIRA_ID}/Fii"
     try:
@@ -144,19 +149,20 @@ def get_fiis_da_carteira():
         pass
     return []
 
+
 def definir_status(fii_type, p_vp_val):
     tipo = (fii_type or "-").strip().lower()
     pvp = safe_float(p_vp_val)
     if pvp is None:
         return "-"
-    if tipo in ["papel", "outro"]:
+    if tipo in ["papel", "outro", "fundos", "fundo"]:
         if pvp < 1.02:
             return "barato"
         elif abs(pvp - 1.02) < 1e-6:
             return "justo"
         else:
             return "caro"
-    if tipo in ["tijolo", "fundo misto", "fundos", "fundo", "misto"]:
+    if tipo in ["tijolo", "fundo misto", "misto"]:
         if pvp < 1.20:
             return "barato"
         elif abs(pvp - 1.20) < 1e-6:
@@ -165,7 +171,8 @@ def definir_status(fii_type, p_vp_val):
             return "caro"
     return "-"
 
-# ---------- main ----------
+
+# === Main ===
 def main():
     with open(FIIS_FILE, "r") as fh:
         fiis = [l.strip().upper() for l in fh if l.strip()]
@@ -176,6 +183,7 @@ def main():
 
     carteira_map = {f.get("ticker_name"): f for f in carteira}
     resultados = []
+
     for ticker in fiis:
         data = carteira_map.get(ticker)
         if data:
@@ -190,6 +198,13 @@ def main():
             pvp_val = safe_float(scraped.get("p_vp"))
             tipo = (scraped.get("fii_type") or "-").strip().lower()
 
+        # Substituição dos nomes dos tipos na exibição
+        tipo_exibicao = tipo
+        if tipo == "fundos":
+            tipo_exibicao = "fof"
+        elif tipo == "outro":
+            tipo_exibicao = "fiagro"
+
         preco_atual = f"{current_val:.2f}" if current_val is not None else "-"
         preco_medio = f"{avg_val:.2f}" if avg_val is not None else "-"
         pvp_str = f"{pvp_val:.2f}" if pvp_val is not None else "-"
@@ -200,26 +215,29 @@ def main():
             "PRECO_ATUAL": preco_atual,
             "PRECO_MEDIO": preco_medio,
             "P/VP": pvp_str,
-            "TIPO": tipo,
+            "TIPO": tipo_exibicao,
             "STATUS": status
         })
 
+    # Impressão formatada
     header = ["FII", "PRECO_ATUAL", "PRECO_MEDIO", "P/VP", "TIPO", "STATUS"]
     col_w = {h: max(len(h), max(len(str(r[h])) for r in resultados)) for h in header}
     head_line = " | ".join(h.ljust(col_w[h]) for h in header)
     print(head_line)
     print("-" * len(head_line))
+
     for r in resultados:
         st = r["STATUS"]
-        colored = f"{COLORS.get(st,'')}{st}{RESET}"
+        colored = f"{COLORS.get(st, '')}{st}{RESET}"
         print(" | ".join([
             str(r["FII"]).ljust(col_w["FII"]),
             str(r["PRECO_ATUAL"]).ljust(col_w["PRECO_ATUAL"]),
             str(r["PRECO_MEDIO"]).ljust(col_w["PRECO_MEDIO"]),
             str(r["P/VP"]).ljust(col_w["P/VP"]),
             str(r["TIPO"]).ljust(col_w["TIPO"]),
-            colored.ljust(col_w["STATUS"] + len(COLORS.get(st,'')) + len(RESET))
+            colored.ljust(col_w["STATUS"] + len(COLORS.get(st, '')) + len(RESET))
         ]))
+
 
 if __name__ == "__main__":
     main()
