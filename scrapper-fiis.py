@@ -133,8 +133,6 @@ def get_fii_from_page(ticker):
     pvp = extract_pvp_from_soup(soup)
     price = extract_price_by_sentence(soup, ticker)
     tipo = extract_tipo_from_articlebody(soup)
-    if price is None or tipo in (None, "-") or pvp is None:
-        print(f"[debug] {ticker}: price={price}, pvp={pvp}, tipo={tipo}")
     return {"current_price": price, "p_vp": pvp, "fii_type": (tipo or "-")}
 
 
@@ -172,14 +170,45 @@ def definir_status(fii_type, p_vp_val):
     return "-"
 
 
+# === Cálculo do Dividend Yield Mensal da Carteira ===
+def calcular_dividend_yield_mensal(carteira):
+    valor_total = 0.0
+    renda_anual_total = 0.0
+    total_atual = 0.0
+
+    for fii in carteira:
+        # saldo = safe_float(fii.get("equity_total"))
+        saldo = safe_float(fii.get("quantity")) * safe_float(fii.get("avg_price"))
+        yoc = safe_float(fii.get("yoc"))  # DY anual (%)
+        total = safe_float(fii.get("equity_total"))  # valor atual do ativo
+
+        if saldo is None or yoc is None:
+            continue
+
+        total_atual += total
+        # print (total)
+
+        valor_total += saldo
+        renda_anual_total += saldo * (yoc / 100)
+
+    if valor_total == 0:
+        return None
+   
+    return {
+        "valor_total": total_atual,
+        "renda_anual": renda_anual_total,
+        "renda_mensal": renda_anual_total / 12,
+        "dy_mensal": (renda_anual_total / total_atual) / 12
+    }
+
+
 # === Main ===
 def main():
     with open(FIIS_FILE, "r") as fh:
         fiis = [l.strip().upper() for l in fh if l.strip()]
 
     carteira = get_fiis_da_carteira()
-    if not carteira:
-        print("⚠️ Cookies inválidos/ausentes ou carteira não acessível — usando scraping público onde necessário.\n")
+    resumo_dy = calcular_dividend_yield_mensal(carteira)
 
     carteira_map = {f.get("ticker_name"): f for f in carteira}
     resultados = []
@@ -198,45 +227,39 @@ def main():
             pvp_val = safe_float(scraped.get("p_vp"))
             tipo = (scraped.get("fii_type") or "-").strip().lower()
 
-        # Substituição dos nomes dos tipos na exibição
-        tipo_exibicao = tipo
-        if tipo == "fundos":
-            tipo_exibicao = "fof"
-        elif tipo == "outro":
-            tipo_exibicao = "fiagro"
-
-        preco_atual = f"{current_val:.2f}" if current_val is not None else "-"
-        preco_medio = f"{avg_val:.2f}" if avg_val is not None else "-"
-        pvp_str = f"{pvp_val:.2f}" if pvp_val is not None else "-"
-        status = definir_status(tipo, pvp_val)
+        tipo_exibicao = "fof" if tipo == "fundos" else "fiagro" if tipo == "outro" else tipo
 
         resultados.append({
             "FII": ticker,
-            "PRECO_ATUAL": preco_atual,
-            "PRECO_MEDIO": preco_medio,
-            "P/VP": pvp_str,
+            "PRECO_ATUAL": f"{current_val:.2f}" if current_val is not None else "-",
+            "PRECO_MEDIO": f"{avg_val:.2f}" if avg_val is not None else "-",
+            "P/VP": f"{pvp_val:.2f}" if pvp_val is not None else "-",
             "TIPO": tipo_exibicao,
-            "STATUS": status
+            "STATUS": definir_status(tipo, pvp_val)
         })
 
-    # Impressão formatada
     header = ["FII", "PRECO_ATUAL", "PRECO_MEDIO", "P/VP", "TIPO", "STATUS"]
     col_w = {h: max(len(h), max(len(str(r[h])) for r in resultados)) for h in header}
-    head_line = " | ".join(h.ljust(col_w[h]) for h in header)
-    print(head_line)
-    print("-" * len(head_line))
+    print(" | ".join(h.ljust(col_w[h]) for h in header))
+    print("-" * sum(col_w.values()))
 
     for r in resultados:
         st = r["STATUS"]
-        colored = f"{COLORS.get(st, '')}{st}{RESET}"
         print(" | ".join([
-            str(r["FII"]).ljust(col_w["FII"]),
-            str(r["PRECO_ATUAL"]).ljust(col_w["PRECO_ATUAL"]),
-            str(r["PRECO_MEDIO"]).ljust(col_w["PRECO_MEDIO"]),
-            str(r["P/VP"]).ljust(col_w["P/VP"]),
-            str(r["TIPO"]).ljust(col_w["TIPO"]),
-            colored.ljust(col_w["STATUS"] + len(COLORS.get(st, '')) + len(RESET))
+            r["FII"].ljust(col_w["FII"]),
+            r["PRECO_ATUAL"].ljust(col_w["PRECO_ATUAL"]),
+            r["PRECO_MEDIO"].ljust(col_w["PRECO_MEDIO"]),
+            r["P/VP"].ljust(col_w["P/VP"]),
+            r["TIPO"].ljust(col_w["TIPO"]),
+            f"{COLORS.get(st,'')}{st}{RESET}".ljust(col_w["STATUS"])
         ]))
+
+    if resumo_dy:
+        print("\n📊 RESUMO DA CARTEIRA (FIIs)")
+        print(f"Valor total investido : R$ {resumo_dy['valor_total']:.2f}")
+        print(f"Renda anual estimada  : R$ {resumo_dy['renda_anual']:.2f}")
+        print(f"Renda mensal estimada : R$ {resumo_dy['renda_mensal']:.2f}")
+        print(f"Dividend Yield mensal : {resumo_dy['dy_mensal'] * 100:.2f}%")
 
 
 if __name__ == "__main__":
